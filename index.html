@@ -1,0 +1,896 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EarnBook - Earn Points Social Platform</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: linear-gradient(135deg, #0f0e13 0%, #1a1625 100%);
+      color: #fff;
+      min-height: 100vh;
+    }
+    #root { width: 100%; min-height: 100vh; padding-bottom: 80px; }
+    
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); border-radius: 10px; }
+    ::-webkit-scrollbar-thumb { background: rgba(20,241,149,0.5); border-radius: 10px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(20,241,149,0.7); }
+    
+    .loading { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; z-index: 10000; background: rgba(15, 14, 19, 0.95); padding: 2rem 3rem; border-radius: 20px; border: 1px solid rgba(255,255,255,0.1); }
+    .spinner { border: 3px solid rgba(255,255,255,0.1); border-top: 3px solid #14F195; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 1rem; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    
+    .gradient-text { background: linear-gradient(135deg, #14F195 0%, #9945FF 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useCallback } = React;
+    const { Connection, PublicKey } = solanaWeb3;
+
+    const SUPABASE_URL = 'https://qqlfzfphpufcdeqcpbwy.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFxbGZ6ZnBocHVmY2RlcWNwYnd5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjEyNTk0MzcsImV4cCI6MjA3NjgzNTQzN30.w7HaN3RiQfoHEyP2rb0XwAG2aKeWy5CIw0ijOmDQ-Vg';
+    const ADMIN_WALLET = '2rwYZWAexatehQ53dRLCcFvfff5sDt8Upfhr1h3Z7Fau';
+    
+    const EP_REWARDS = {
+      CREATE_POST: 10,
+      RECEIVE_LIKE: 2,
+      RECEIVE_COMMENT: 5,
+      GIVE_LIKE: 1,
+      GIVE_COMMENT: 3,
+      X_POST: 25
+    };
+
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
+
+    function EarnBook() {
+      // State management
+      const [wallet, setWallet] = useState(null);
+      const [currentUser, setCurrentUser] = useState(null);
+      const [loading, setLoading] = useState(false);
+      const [loadingMessage, setLoadingMessage] = useState('');
+      const [activeTab, setActiveTab] = useState('home');
+      const [allPosts, setAllPosts] = useState([]);
+      const [leaderboard, setLeaderboard] = useState([]);
+      const [notifications, setNotifications] = useState([]);
+      const [searchQuery, setSearchQuery] = useState('');
+      const [searchResults, setSearchResults] = useState([]);
+      const [newPost, setNewPost] = useState('');
+      const [selectedMedia, setSelectedMedia] = useState(null);
+      const [showNotifications, setShowNotifications] = useState(false);
+      const [viewingProfile, setViewingProfile] = useState(null);
+      const [xPostUrl, setXPostUrl] = useState('');
+      const [xPostEmbed, setXPostEmbed] = useState(null);
+      const [userXPosts, setUserXPosts] = useState([]);
+      const [showSettings, setShowSettings] = useState(false);
+      const [darkMode, setDarkMode] = useState(true);
+      const [editingProfile, setEditingProfile] = useState(false);
+      const [editUsername, setEditUsername] = useState('');
+      const [editBio, setEditBio] = useState('');
+      const [editPfpFile, setEditPfpFile] = useState(null);
+      const [showComments, setShowComments] = useState({});
+      const [commentText, setCommentText] = useState({});
+
+      // Connect Phantom Wallet
+      const connectWallet = async () => {
+        try {
+          setLoading(true);
+          setLoadingMessage('Connecting wallet...');
+          
+          const { solana } = window;
+          if (!solana || !solana.isPhantom) {
+            alert('Please install Phantom Wallet!');
+            setLoading(false);
+            return;
+          }
+
+          const response = await solana.connect();
+          const walletAddress = response.publicKey.toString();
+          setWallet(walletAddress);
+
+          // Check if user exists
+          const { data: existingUser } = await supabase
+            .from('users')
+            .select('*')
+            .eq('wallet', walletAddress)
+            .single();
+
+          if (existingUser) {
+            setCurrentUser(existingUser);
+          } else {
+            // Create new user
+            const newUser = {
+              wallet: walletAddress,
+              username: `User${Math.floor(Math.random() * 10000)}`,
+              pfp: `https://api.dicebear.com/7.x/avataaars/svg?seed=${walletAddress}`,
+              bio: 'New to EarnBook!',
+              total_ep: 0,
+              rank: 0,
+              followers_count: 0,
+              following_count: 0,
+              banned: false,
+              created_at: new Date().toISOString()
+            };
+
+            const { data, error } = await supabase
+              .from('users')
+              .insert([newUser])
+              .select()
+              .single();
+
+            if (error) throw error;
+            setCurrentUser(data);
+          }
+
+          await loadData();
+          setLoading(false);
+        } catch (error) {
+          console.error('Wallet connection error:', error);
+          alert('Failed to connect wallet');
+          setLoading(false);
+        }
+      };
+
+      // Load all data
+      const loadData = async () => {
+        await Promise.all([
+          loadPosts(),
+          loadLeaderboard(),
+          loadNotifications()
+        ]);
+      };
+
+      // Load posts
+      const loadPosts = async () => {
+        const { data, error } = await supabase
+          .from('posts')
+          .select(`
+            *,
+            author:users!posts_author_fkey(wallet, username, pfp),
+            likes:likes(user_wallet),
+            comments:comments(*)
+          `)
+          .order('created_at', { ascending: false });
+
+        if (!error && data) {
+          setAllPosts(data);
+        }
+      };
+
+      // Load leaderboard
+      const loadLeaderboard = async () => {
+        const { data, error } = await supabase
+          .from('users')
+          .select('*')
+          .eq('banned', false)
+          .order('total_ep', { ascending: false })
+          .limit(50);
+
+        if (!error && data) {
+          const ranked = data.map((user, index) => ({
+            ...user,
+            rank: index + 1
+          }));
+          setLeaderboard(ranked);
+        }
+      };
+
+      // Load notifications
+      const loadNotifications = async () => {
+        if (!currentUser) return;
+        
+        const { data, error } = await supabase
+          .from('notifications')
+          .select('*')
+          .eq('user_wallet', currentUser.wallet)
+          .order('created_at', { ascending: false })
+          .limit(50);
+
+        if (!error && data) {
+          setNotifications(data);
+        }
+      };
+
+      // Create post
+      const createPost = async () => {
+        if (!newPost.trim() && !selectedMedia) return;
+
+        try {
+          setLoading(true);
+          setLoadingMessage('Creating post...');
+
+          let mediaUrl = null;
+          if (selectedMedia) {
+            // Upload media or use URL
+            mediaUrl = selectedMedia;
+          }
+
+          const post = {
+            author: currentUser.wallet,
+            content: newPost,
+            media_url: mediaUrl,
+            media_type: mediaUrl ? (mediaUrl.includes('giphy') ? 'gif' : 'image') : null,
+            likes_count: 0,
+            comments_count: 0,
+            created_at: new Date().toISOString()
+          };
+
+          const { error } = await supabase
+            .from('posts')
+            .insert([post]);
+
+          if (error) throw error;
+
+          // Award EP for creating post
+          await awardEP(currentUser.wallet, EP_REWARDS.CREATE_POST, 'Created a post');
+
+          setNewPost('');
+          setSelectedMedia(null);
+          await loadPosts();
+          setLoading(false);
+        } catch (error) {
+          console.error('Create post error:', error);
+          alert('Failed to create post');
+          setLoading(false);
+        }
+      };
+
+      // Like post
+      const likePost = async (postId, authorWallet) => {
+        if (!currentUser) return;
+
+        try {
+          // Check if already liked
+          const { data: existing } = await supabase
+            .from('likes')
+            .select('*')
+            .eq('post_id', postId)
+            .eq('user_wallet', currentUser.wallet)
+            .single();
+
+          if (existing) {
+            // Unlike
+            await supabase
+              .from('likes')
+              .delete()
+              .eq('post_id', postId)
+              .eq('user_wallet', currentUser.wallet);
+
+            await supabase
+              .from('posts')
+              .update({ likes_count: existing.likes_count - 1 })
+              .eq('id', postId);
+          } else {
+            // Like
+            await supabase
+              .from('likes')
+              .insert([{ post_id: postId, user_wallet: currentUser.wallet }]);
+
+            await supabase
+              .from('posts')
+              .update({ likes_count: (allPosts.find(p => p.id === postId)?.likes_count || 0) + 1 })
+              .eq('id', postId);
+
+            // Award EP
+            await awardEP(currentUser.wallet, EP_REWARDS.GIVE_LIKE, 'Liked a post');
+            await awardEP(authorWallet, EP_REWARDS.RECEIVE_LIKE, 'Received a like');
+
+            // Create notification
+            await createNotification(authorWallet, 'like', `${currentUser.username} liked your post`);
+          }
+
+          await loadPosts();
+        } catch (error) {
+          console.error('Like error:', error);
+        }
+      };
+
+      // Add comment
+      const addComment = async (postId, authorWallet) => {
+        const text = commentText[postId];
+        if (!text || !text.trim()) return;
+
+        try {
+          await supabase
+            .from('comments')
+            .insert([{
+              post_id: postId,
+              author: currentUser.wallet,
+              content: text,
+              created_at: new Date().toISOString()
+            }]);
+
+          await supabase
+            .from('posts')
+            .update({ comments_count: (allPosts.find(p => p.id === postId)?.comments_count || 0) + 1 })
+            .eq('id', postId);
+
+          // Award EP
+          await awardEP(currentUser.wallet, EP_REWARDS.GIVE_COMMENT, 'Commented on a post');
+          await awardEP(authorWallet, EP_REWARDS.RECEIVE_COMMENT, 'Received a comment');
+
+          // Create notification
+          await createNotification(authorWallet, 'comment', `${currentUser.username} commented on your post`);
+
+          setCommentText({ ...commentText, [postId]: '' });
+          await loadPosts();
+        } catch (error) {
+          console.error('Comment error:', error);
+        }
+      };
+
+      // Award EP
+      const awardEP = async (walletAddress, points, reason) => {
+        try {
+          const { data: user } = await supabase
+            .from('users')
+            .select('total_ep')
+            .eq('wallet', walletAddress)
+            .single();
+
+          if (user) {
+            await supabase
+              .from('users')
+              .update({ total_ep: user.total_ep + points })
+              .eq('wallet', walletAddress);
+
+            await loadLeaderboard();
+            
+            if (walletAddress === currentUser?.wallet) {
+              setCurrentUser({ ...currentUser, total_ep: currentUser.total_ep + points });
+            }
+          }
+        } catch (error) {
+          console.error('Award EP error:', error);
+        }
+      };
+
+      // Create notification
+      const createNotification = async (userWallet, type, message) => {
+        if (userWallet === currentUser.wallet) return; // Don't notify yourself
+
+        await supabase
+          .from('notifications')
+          .insert([{
+            user_wallet: userWallet,
+            type,
+            message,
+            read: false,
+            created_at: new Date().toISOString()
+          }]);
+      };
+
+      // Submit X/Twitter post
+      const submitXPost = async () => {
+        if (!xPostUrl.trim()) return;
+
+        try {
+          setLoading(true);
+          setLoadingMessage('Validating X post...');
+
+          // Extract tweet ID from URL
+          const tweetIdMatch = xPostUrl.match(/status\/(\d+)/);
+          if (!tweetIdMatch) {
+            alert('Invalid X/Twitter URL');
+            setLoading(false);
+            return;
+          }
+
+          const tweetId = tweetIdMatch[1];
+
+          // Check for duplicates
+          const { data: existing } = await supabase
+            .from('x_posts')
+            .select('*')
+            .eq('tweet_id', tweetId);
+
+          if (existing && existing.length > 0) {
+            alert('This tweet has already been submitted!');
+            setLoading(false);
+            return;
+          }
+
+          // Create embed
+          const embedHtml = `<blockquote class="twitter-tweet"><a href="${xPostUrl}"></a></blockquote><script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>`;
+          setXPostEmbed(embedHtml);
+
+          // For now, we'll ask user to confirm it contains $Earnbook
+          // In production, you'd use Twitter API to fetch tweet text
+          const hasEarnbook = window.confirm('Does this tweet contain "$Earnbook"? Click OK if yes, Cancel if no.');
+          
+          if (!hasEarnbook) {
+            alert('Tweet must contain "$Earnbook" to earn points!');
+            setLoading(false);
+            return;
+          }
+
+          // Save to database
+          await supabase
+            .from('x_posts')
+            .insert([{
+              user_wallet: currentUser.wallet,
+              tweet_url: xPostUrl,
+              tweet_id: tweetId,
+              tweet_text: 'Tweet contains $Earnbook',
+              verified: true,
+              created_at: new Date().toISOString()
+            }]);
+
+          // Award 25 EP
+          await awardEP(currentUser.wallet, EP_REWARDS.X_POST, 'Submitted valid X post');
+
+          alert('✅ X post submitted! +25 EP awarded!');
+          setXPostUrl('');
+          setXPostEmbed(null);
+          await loadUserXPosts();
+          setLoading(false);
+        } catch (error) {
+          console.error('X post error:', error);
+          alert('Failed to submit X post');
+          setLoading(false);
+        }
+      };
+
+      // Load user X posts
+      const loadUserXPosts = async () => {
+        if (!currentUser) return;
+
+        const { data } = await supabase
+          .from('x_posts')
+          .select('*')
+          .eq('user_wallet', currentUser.wallet)
+          .order('created_at', { ascending: false });
+
+        if (data) setUserXPosts(data);
+      };
+
+      // Follow/Unfollow user
+      const toggleFollow = async (targetWallet) => {
+        if (!currentUser || targetWallet === currentUser.wallet) return;
+
+        try {
+          const { data: existing } = await supabase
+            .from('follows')
+            .select('*')
+            .eq('follower_wallet', currentUser.wallet)
+            .eq('following_wallet', targetWallet)
+            .single();
+
+          if (existing) {
+            // Unfollow
+            await supabase
+              .from('follows')
+              .delete()
+              .eq('follower_wallet', currentUser.wallet)
+              .eq('following_wallet', targetWallet);
+          } else {
+            // Follow
+            await supabase
+              .from('follows')
+              .insert([{
+                follower_wallet: currentUser.wallet,
+                following_wallet: targetWallet,
+                created_at: new Date().toISOString()
+              }]);
+
+            await createNotification(targetWallet, 'follow', `${currentUser.username} started following you`);
+          }
+
+          await loadData();
+        } catch (error) {
+          console.error('Follow error:', error);
+        }
+      };
+
+      // Search
+      const performSearch = async () => {
+        if (!searchQuery.trim()) return;
+
+        const { data: users } = await supabase
+          .from('users')
+          .select('*')
+          .ilike('username', `%${searchQuery}%`)
+          .limit(20);
+
+        const { data: posts } = await supabase
+          .from('posts')
+          .select('*')
+          .ilike('content', `%${searchQuery}%`)
+          .limit(20);
+
+        setSearchResults({ users: users || [], posts: posts || [] });
+      };
+
+      // Update profile
+      const updateProfile = async () => {
+        try {
+          setLoading(true);
+          setLoadingMessage('Updating profile...');
+
+          let pfpUrl = currentUser.pfp;
+          
+          if (editPfpFile) {
+            // In production, upload to storage and get URL
+            // For now, we'll use a placeholder
+            pfpUrl = URL.createObjectURL(editPfpFile);
+          }
+
+          await supabase
+            .from('users')
+            .update({
+              username: editUsername || currentUser.username,
+              bio: editBio || currentUser.bio,
+              pfp: pfpUrl
+            })
+            .eq('wallet', currentUser.wallet);
+
+          setCurrentUser({
+            ...currentUser,
+            username: editUsername || currentUser.username,
+            bio: editBio || currentUser.bio,
+            pfp: pfpUrl
+          });
+
+          setEditingProfile(false);
+          setLoading(false);
+          alert('Profile updated!');
+        } catch (error) {
+          console.error('Update profile error:', error);
+          alert('Failed to update profile');
+          setLoading(false);
+        }
+      };
+
+      // Render functions
+      const renderHome = () => (
+        <div style={styles.container}>
+          {currentUser && (
+            <div style={styles.createPost}>
+              <textarea
+                style={styles.textarea}
+                value={newPost}
+                onChange={(e) => setNewPost(e.target.value)}
+                placeholder="What's on your mind?"
+                maxLength={500}
+              />
+              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => setSelectedMedia(URL.createObjectURL(e.target.files[0]))}
+                  style={{ display: 'none' }}
+                  id="media-upload"
+                />
+                <label htmlFor="media-upload" style={styles.btnSecondary}>
+                  📷 Photo
+                </label>
+                <button style={styles.btnSecondary}>🎬 GIF</button>
+              </div>
+              {selectedMedia && (
+                <div style={{ marginTop: '1rem' }}>
+                  <img src={selectedMedia} alt="Preview" style={{ maxWidth: '100%', borderRadius: '12px' }} />
+                </div>
+              )}
+              <button onClick={createPost} style={styles.btnPrimary}>
+                Post (+{EP_REWARDS.CREATE_POST} EP)
+              </button>
+            </div>
+          )}
+
+          <div style={styles.posts}>
+            {allPosts.map(post => (
+              <div key={post.id} style={styles.post}>
+                <div style={styles.postHeader}>
+                  <img src={post.author.pfp} alt="" style={styles.avatar} />
+                  <div>
+                    <div style={styles.username}>{post.author.username}</div>
+                    <div style={styles.timestamp}>{new Date(post.created_at).toLocaleString()}</div>
+                  </div>
+                </div>
+                <div style={styles.postContent}>{post.content}</div>
+                {post.media_url && (
+                  <img src={post.media_url} alt="" style={{ maxWidth: '100%', borderRadius: '12px', marginTop: '1rem' }} />
+                )}
+                <div style={styles.postActions}>
+                  <button onClick={() => likePost(post.id, post.author.wallet)} style={styles.actionBtn}>
+                    ❤️ {post.likes_count}
+                  </button>
+                  <button onClick={() => setShowComments({ ...showComments, [post.id]: !showComments[post.id] })} style={styles.actionBtn}>
+                    💬 {post.comments_count}
+                  </button>
+                </div>
+                {showComments[post.id] && (
+                  <div style={{ marginTop: '1rem' }}>
+                    {post.comments?.map(comment => (
+                      <div key={comment.id} style={styles.comment}>
+                        <strong>{comment.author}</strong>: {comment.content}
+                      </div>
+                    ))}
+                    {currentUser && (
+                      <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.5rem' }}>
+                        <input
+                          type="text"
+                          value={commentText[post.id] || ''}
+                          onChange={(e) => setCommentText({ ...commentText, [post.id]: e.target.value })}
+                          placeholder="Add a comment..."
+                          style={styles.input}
+                        />
+                        <button onClick={() => addComment(post.id, post.author.wallet)} style={styles.btnPrimary}>
+                          Send
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+
+      const renderLeaderboard = () => (
+        <div style={styles.container}>
+          <h2 style={styles.h2}>🏆 Top 50 Leaderboard</h2>
+          {leaderboard.map((user, index) => (
+            <div key={user.wallet} style={styles.leaderboardItem}>
+              <div style={styles.rank}>#{index + 1}</div>
+              <img src={user.pfp} alt="" style={styles.avatar} />
+              <div style={{ flex: 1 }}>
+                <div style={styles.username}>{user.username}</div>
+                <div style={{ opacity: 0.7, fontSize: '0.9rem' }}>{user.total_ep} EP</div>
+              </div>
+              {index === 0 && <span style={{ fontSize: '1.5rem' }}>🥇</span>}
+              {index === 1 && <span style={{ fontSize: '1.5rem' }}>🥈</span>}
+              {index === 2 && <span style={{ fontSize: '1.5rem' }}>🥉</span>}
+            </div>
+          ))}
+        </div>
+      );
+
+      const renderProfile = () => {
+        const profileUser = viewingProfile || currentUser;
+        if (!profileUser) return null;
+
+        return (
+          <div style={styles.container}>
+            <div style={styles.profile}>
+              <img src={profileUser.pfp} alt="" style={{ width: '100px', height: '100px', borderRadius: '50%' }} />
+              <h2 style={styles.username}>{profileUser.username}</h2>
+              <p style={styles.bio}>{profileUser.bio}</p>
+              <div style={styles.stats}>
+                <div>
+                  <div style={styles.statValue}>{profileUser.total_ep}</div>
+                  <div style={styles.statLabel}>EP</div>
+                </div>
+                <div>
+                  <div style={styles.statValue}>#{profileUser.rank || '?'}</div>
+                  <div style={styles.statLabel}>Rank</div>
+                </div>
+                <div>
+                  <div style={styles.statValue}>{profileUser.followers_count}</div>
+                  <div style={styles.statLabel}>Followers</div>
+                </div>
+                <div>
+                  <div style={styles.statValue}>{profileUser.following_count}</div>
+                  <div style={styles.statLabel}>Following</div>
+                </div>
+              </div>
+
+              {currentUser && profileUser.wallet === currentUser.wallet && (
+                <>
+                  <button onClick={() => setEditingProfile(true)} style={styles.btnPrimary}>
+                    Edit Profile
+                  </button>
+
+                  <div style={{ marginTop: '2rem', textAlign: 'left' }}>
+                    <h3 style={styles.h3}>📝 Your Posts</h3>
+                    {allPosts.filter(p => p.author.wallet === currentUser.wallet).map(post => (
+                      <div key={post.id} style={styles.post}>
+                        <p>{post.content}</p>
+                        <div style={{ opacity: 0.6, fontSize: '0.85rem', marginTop: '0.5rem' }}>
+                          ❤️ {post.likes_count} | 💬 {post.comments_count}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ marginTop: '2rem', textAlign: 'left' }}>
+                    <h3 style={styles.h3}>🐦 X Posts (+25 EP each)</h3>
+                    <input
+                      type="text"
+                      value={xPostUrl}
+                      onChange={(e) => setXPostUrl(e.target.value)}
+                      placeholder="Paste X/Twitter post URL..."
+                      style={styles.input}
+                    />
+                    <button onClick={submitXPost} style={styles.btnPrimary}>
+                      Submit X Post
+                    </button>
+                    <p style={{ opacity: 0.7, fontSize: '0.85rem', marginTop: '0.5rem' }}>
+                      ⚠️ Tweet must contain "$Earnbook"
+                    </p>
+
+                    <div style={{ marginTop: '1rem' }}>
+                      {userXPosts.map(xpost => (
+                        <div key={xpost.id} style={styles.post}>
+                          <a href={xpost.tweet_url} target="_blank" rel="noopener noreferrer" style={{ color: '#14F195' }}>
+                            View Tweet
+                          </a>
+                          <div style={{ opacity: 0.6, fontSize: '0.85rem', marginTop: '0.5rem' }}>
+                            Submitted: {new Date(xpost.created_at).toLocaleDateString()}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        );
+      };
+
+      const renderSearch = () => (
+        <div style={styles.container}>
+          <div style={styles.createPost}>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && performSearch()}
+              placeholder="Search users or posts..."
+              style={styles.input}
+            />
+            <button onClick={performSearch} style={styles.btnPrimary}>
+              Search
+            </button>
+          </div>
+
+          {searchResults.users && searchResults.users.length > 0 && (
+            <div>
+              <h3 style={styles.h3}>👥 Users</h3>
+              {searchResults.users.map(user => (
+                <div key={user.wallet} style={styles.searchResult} onClick={() => setViewingProfile(user)}>
+                  <img src={user.pfp} alt="" style={styles.avatar} />
+                  <div>
+                    <div style={styles.username}>{user.username}</div>
+                    <div style={{ opacity: 0.7, fontSize: '0.9rem' }}>{user.total_ep} EP</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+
+      // Load data on mount
+      useEffect(() => {
+        if (currentUser) {
+          loadData();
+          loadUserXPosts();
+        }
+      }, [currentUser]);
+
+      // Styles
+      const styles = {
+        container: { maxWidth: '600px', margin: '0 auto', padding: '1rem' },
+        header: { background: 'rgba(15,14,19,0.95)', padding: '1rem', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+        logo: { fontSize: '1.5rem', fontWeight: 700 },
+        createPost: { background: 'rgba(255,255,255,0.05)', borderRadius: '20px', padding: '1.5rem', border: '1px solid rgba(255,255,255,0.1)', marginBottom: '1.5rem' },
+        textarea: { width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '12px', padding: '1rem', color: 'white', fontSize: '1rem', fontFamily: 'inherit', resize: 'vertical', minHeight: '100px' },
+        input: { width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '12px', padding: '0.75rem', color: 'white', fontSize: '1rem', fontFamily: 'inherit' },
+        btnPrimary: { background: 'linear-gradient(90deg, #14F195, #9945FF)', color: 'white', border: 'none', padding: '0.75rem 1.5rem', borderRadius: '12px', cursor: 'pointer', fontWeight: 700, width: '100%', marginTop: '1rem', fontSize: '1rem' },
+        btnSecondary: { background: 'rgba(255,255,255,0.1)', color: 'white', border: '1px solid rgba(255,255,255,0.2)', padding: '0.5rem 1rem', borderRadius: '8px', cursor: 'pointer', fontWeight: 600 },
+        posts: { display: 'flex', flexDirection: 'column', gap: '1rem' },
+        post: { background: 'rgba(255,255,255,0.05)', borderRadius: '20px', padding: '1.5rem', border: '1px solid rgba(255,255,255,0.1)' },
+        postHeader: { display: 'flex', gap: '1rem', marginBottom: '1rem' },
+        avatar: { width: '48px', height: '48px', borderRadius: '50%' },
+        username: { fontWeight: 700, fontSize: '1.1rem' },
+        timestamp: { fontSize: '0.85rem', opacity: 0.6 },
+        postContent: { margin: '1rem 0', lineHeight: 1.6 },
+        postActions: { display: 'flex', gap: '1rem', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.1)' },
+        actionBtn: { background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.2)', color: 'white', padding: '0.5rem 1rem', borderRadius: '8px', cursor: 'pointer', fontWeight: 600, flex: 1 },
+        comment: { background: 'rgba(255,255,255,0.03)', padding: '0.75rem', borderRadius: '8px', marginBottom: '0.5rem' },
+        profile: { background: 'rgba(255,255,255,0.05)', borderRadius: '20px', padding: '2rem', border: '1px solid rgba(255,255,255,0.1)', textAlign: 'center' },
+        bio: { opacity: 0.8, margin: '0.5rem 0 1.5rem' },
+        stats: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', margin: '2rem 0', padding: '1rem', background: 'rgba(255,255,255,0.03)', borderRadius: '12px' },
+        statValue: { fontSize: '1.5rem', fontWeight: 700, color: '#14F195' },
+        statLabel: { fontSize: '0.8rem', opacity: 0.6 },
+        leaderboardItem: { background: 'rgba(255,255,255,0.05)', borderRadius: '12px', padding: '1rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '1rem', border: '1px solid rgba(255,255,255,0.1)' },
+        rank: { fontSize: '1.2rem', fontWeight: 700, color: '#14F195', minWidth: '40px' },
+        searchResult: { background: 'rgba(255,255,255,0.05)', borderRadius: '12px', padding: '1rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '1rem', cursor: 'pointer', border: '1px solid rgba(255,255,255,0.1)' },
+        bottomNav: { position: 'fixed', bottom: 0, left: 0, right: 0, background: 'rgba(15,14,19,0.95)', backdropFilter: 'blur(20px)', borderTop: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-around', padding: '1rem' },
+        navBtn: { background: 'none', border: 'none', color: 'white', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', opacity: 0.6, fontSize: '0.8rem' },
+        navBtnActive: { opacity: 1, color: '#14F195' },
+        h2: { fontWeight: 700, marginBottom: '1.5rem', fontSize: '1.5rem' },
+        h3: { fontWeight: 600, marginTop: '1.5rem', marginBottom: '1rem', fontSize: '1.2rem' }
+      };
+
+      // Main render
+      return (
+        <div>
+          {loading && (
+            <div className="loading">
+              <div className="spinner"></div>
+              <p>{loadingMessage}</p>
+            </div>
+          )}
+
+          {!wallet ? (
+            <div style={{ textAlign: 'center', padding: '3rem 1rem' }}>
+              <h1 className="gradient-text" style={{ fontSize: '3rem', marginBottom: '1rem' }}>💰 EarnBook</h1>
+              <p style={{ fontSize: '1.2rem', opacity: 0.8, marginBottom: '2rem' }}>
+                Earn Points. Climb Leaderboard. Win Rewards.
+              </p>
+              <button onClick={connectWallet} style={styles.btnPrimary}>
+                Connect Phantom Wallet
+              </button>
+            </div>
+          ) : (
+            <>
+              <div style={styles.header}>
+                <div className="gradient-text" style={{ fontSize: '1.5rem', fontWeight: 700 }}>
+                  💰 EarnBook
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                  <div style={{ background: 'rgba(20,241,149,0.2)', padding: '0.5rem 1rem', borderRadius: '12px', fontWeight: 700, color: '#14F195' }}>
+                    {currentUser?.total_ep || 0} EP
+                  </div>
+                  <button onClick={() => setShowNotifications(!showNotifications)} style={{ background: 'none', border: 'none', color: 'white', fontSize: '1.5rem', cursor: 'pointer' }}>
+                    🔔
+                  </button>
+                </div>
+              </div>
+
+              {activeTab === 'home' && renderHome()}
+              {activeTab === 'search' && renderSearch()}
+              {activeTab === 'leaderboard' && renderLeaderboard()}
+              {activeTab === 'profile' && renderProfile()}
+
+              <div style={styles.bottomNav}>
+                <button 
+                  onClick={() => setActiveTab('home')} 
+                  style={{...styles.navBtn, ...(activeTab === 'home' ? styles.navBtnActive : {})}}
+                >
+                  🏠<br/>Home
+                </button>
+                <button 
+                  onClick={() => setActiveTab('search')} 
+                  style={{...styles.navBtn, ...(activeTab === 'search' ? styles.navBtnActive : {})}}
+                >
+                  🔍<br/>Search
+                </button>
+                <button 
+                  onClick={() => setActiveTab('leaderboard')} 
+                  style={{...styles.navBtn, ...(activeTab === 'leaderboard' ? styles.navBtnActive : {})}}
+                >
+                  🏆<br/>Leaderboard
+                </button>
+                <button 
+                  onClick={() => setActiveTab('profile')} 
+                  style={{...styles.navBtn, ...(activeTab === 'profile' ? styles.navBtnActive : {})}}
+                >
+                  👤<br/>Profile
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.render(React.createElement(EarnBook), document.getElementById('root'));
+  </script>
+</body>
+</html>
