@@ -1,0 +1,11 @@
+{
+  "name": "earnbook",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A social prototype for blockchain communities with posts, non-financial points, and a leaderboard.",
+  "scripts": {
+    "test": "node --test",
+    "validate": "node scripts/validate-static-app.mjs"
+  }
+}
